@@ -1,1 +1,21 @@
-spring.application.name=chen-api-gateway
+spring:
+  application:
+    name: chen-api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: add_request_header_route
+          uri: http://localhost:8123
+          filters:
+            - AddRequestHeader=xiaozhang, niubi
+          predicates:
+            - Path=/api/**
+server:
+  port: 8090
+
+logging:
+  level:
+    org:
+      springframework:
+        cloud:
+          gateway: trace
