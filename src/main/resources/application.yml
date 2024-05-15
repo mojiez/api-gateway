@@ -4,7 +4,7 @@ spring:
   cloud:
     gateway:
       routes:
-        - id: add_request_header_route
+        - id: api_route
           uri: http://localhost:8123
           filters:
             - AddRequestHeader=xiaozhang, niubi

@@ -43,6 +43,11 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId> spring-cloud-starter-circuitbreaker-reactor-resilience4j</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.yichen</groupId>
+            <artifactId>chenApi-client-sdk</artifactId>
+            <version>0.0.1</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>
