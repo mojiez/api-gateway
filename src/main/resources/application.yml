@@ -12,6 +12,17 @@ spring:
             - Path=/api/**
 server:
   port: 8090
+# application.yml (Spring Boot)
+
+dubbo:
+  application:
+    name: dubbo-springboot-demo-consumer
+    qos-port: 33333
+  protocol:
+    name: dubbo
+    port: 22221
+  registry:
+    address: nacos://localhost:8848
 
 logging:
   level:
