@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.7.5</version>
+        <version>2.7.0</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.atyichen</groupId>
@@ -18,12 +18,16 @@
         <spring-cloud.version>2021.0.3</spring-cloud.version>
     </properties>
     <dependencies>
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
             <scope>runtime</scope>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.atyichen</groupId>
+            <artifactId>chen-api-common</artifactId>
+            <version>0.0.1</version>
         </dependency>
         <dependency>
             <groupId>org.apache.dubbo</groupId>

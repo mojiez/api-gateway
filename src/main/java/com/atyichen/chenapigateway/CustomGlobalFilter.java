@@ -2,6 +2,9 @@ package com.atyichen.chenapigateway;
 
 import com.yichen.chenapiclientsdk.Utils.SignUtils;
 import lombok.extern.slf4j.Slf4j;
+import model.entity.InterfaceInfo;
+import model.entity.User;
+import org.apache.dubbo.config.annotation.DubboReference;
 import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -20,6 +23,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import service.InnerInterfaceInfoService;
+import service.InnerUserInterfaceInfoService;
+import service.InnerUserService;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -39,6 +45,15 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
      * @param chain 责任链模式 所有过滤器从上到下依此执行 这个责任链放行就去找下一个责任链
      * @return
      */
+
+    @DubboReference
+    private InnerInterfaceInfoService innerInterfaceInfoService;
+
+    @DubboReference
+    private InnerUserService innerUserService;
+
+    @DubboReference
+    private InnerUserInterfaceInfoService innerUserInterfaceInfoService;
 
     private static final List<String> IP_WHITE_LIST = Arrays.asList("127.0.0.1");
     @Override
@@ -75,7 +90,23 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 ////        if (!accessKey.equals("kj") || !secretKey.equals("abcdefgh")) {
 ////            throw new RuntimeException("无权限");
 ////        }
-//        // todo 实际情况应该是去数据库中查 是否已经分配给用户
+//        // 实际情况应该是去数据库中查 是否已经分配给用户（根据ak 查询用户是否存在）
+        HttpHeaders headers = request.getHeaders();
+        String accessKey = headers.getFirst("accessKey");
+        String body = headers.getFirst("body");
+        String sign = headers.getFirst("sign");
+        String nonce = headers.getFirst("nonce");
+        String timestamp = headers.getFirst("timestamp");
+        User invokeUser = null;
+        try {
+            invokeUser = innerUserService.getInvokeUser(accessKey);
+        }catch (Exception e) {
+            log.error("getInvokeUser Error",e);
+        }
+        if (invokeUser == null) {
+            return handleNoAuth(response);
+        }
+
 //        if (!accessKey.equals("kj")) throw new RuntimeException("无权限");
 //        // todo 这里的随机数应该是去数据库里面查的（主要是防重放）服务端要保存用过的随机数 这个随机数是新的 就能用？？
 //        // todo 时间和当前时间不能超过5分钟
@@ -88,38 +119,39 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //        // 1. 之前没调用，创建 2.之前调用了，调用次数加1
 //
 //        return result;
-        HttpHeaders headers = request.getHeaders();
-        String accessKey = headers.getFirst("accessKey");
-        String body = headers.getFirst("body");
-        String sign = headers.getFirst("sign");
-        String nonce = headers.getFirst("nonce");
-        String timestamp = headers.getFirst("timestamp");
 
-        // todo 从数据库里面取出来sk
-        String secretKey = "abcdefgh";
-        if (!accessKey.equals("kj")) {
-            return handleNoAuth(response);
-        }
+        // 从数据库中取出 sk
+        String secretKey = invokeUser.getSecretKey();
 
         String serverSign = SignUtils.getSign(body, secretKey);
-        if (!serverSign.equals(sign)) return handleNoAuth(response);
+        if (sign == null || !serverSign.equals(sign)) return handleNoAuth(response);
 
         // 5. 判断请求的模拟接口是否存在
         // 模拟接口信息存在数据库中 判断数据库中是否有符合要求的接口
 
         // todo 从数据库中查询模拟接口是否存在
+        String path = request.getPath().value();
+        String method = request.getMethod().toString();
+        if (method == null || path ==null) {
+            handleInvokeError(response);
+        }
+        InterfaceInfo interfaceInfo = null;
+        try {
+            interfaceInfo = innerInterfaceInfoService.getInterfaceInfo(path, method);
+        }catch (Exception e) {
+            log.error("getInvokeInterfaceInfoError",e);
+        }
+        if (interfaceInfo == null) {
+            return handleNoAuth(response);
+        }
+
         // 方法1 ： 引入mapper mybatis 自己去查数据库
         // 方法2 ： 远程调用可以操作数据库的项目提供的接口 有点像微服务 注册中心？
         // 方法2可以用 ： 1.HTTP请求（用HTTPClient RestTemplate Feign） 2. RPC （Dubbo）
 
-//        // 6. 请求转发 调用模拟接口 **这是一个异步操作**
-//        Mono<Void> filter = chain.filter(exchange);
-
-
-        // 注意 6执行完才去执行7 但是6是一个异步的方法
-        // 7. 响应日志
 //        log.info("响应， "+response.getStatusCode());
-        return testResponseLog(exchange, chain);
+        // 处理请求
+        return testResponseLog(exchange, chain, interfaceInfo.getId(), invokeUser.getId());
 //
 //
 //        // 调用失败 返回一个规范的错误码
@@ -140,7 +172,7 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
      * @param chain
      * @return
      */
-    public Mono<Void> testResponseLog(ServerWebExchange exchange, GatewayFilterChain chain) {
+    public Mono<Void> testResponseLog(ServerWebExchange exchange, GatewayFilterChain chain, long interfaceInfoId, long userId) {
         try {
             // 从交换机里拿到原本的response对象
             ServerHttpResponse originalResponse = exchange.getResponse();
@@ -161,40 +193,63 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 
                         // 往返回值里面写数据
                         return super.writeWith(
-                                fluxBody.buffer().map(dataBuffers -> {
-                                    // 调用成功 接口调用次数+1
-
-                                    // 合并多个流集合，解决返回体分段传输
-                                    DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                                    DataBuffer buff = dataBufferFactory.join(dataBuffers);
-                                    byte[] content = new byte[buff.readableByteCount()];
-                                    buff.read(content);
-                                    DataBufferUtils.release(buff);//释放掉内存
-
-                                    String data = new String(content, StandardCharsets.UTF_8);
-
-                                    // 调用成功 接口次数+1 todo invokeCount
-                                    // 怎么知道调用成功？
-
-//                                    //排除Excel导出，不是application/json不打印。若请求是上传图片则在最上面判断。
-//                                    MediaType contentType = originalResponse.getHeaders().getContentType();
-//                                    if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
-//                                        return bufferFactory.wrap(content);
+                                fluxBody.map(dataBuffer -> {
+//                                    // 调用成功 接口调用次数+1
+//
+//                                    // 合并多个流集合，解决返回体分段传输
+//                                    DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+//                                    DataBuffer buff = dataBufferFactory.join(dataBuffers);
+//                                    byte[] content = new byte[buff.readableByteCount()];
+//                                    buff.read(content);
+//                                    DataBufferUtils.release(buff);//释放掉内存
+//
+//                                    String data = new String(content, StandardCharsets.UTF_8);
+//
+//                                    // 调用成功 接口次数+1
+//                                    try {
+//                                        innerUserInterfaceInfoService.invokeCount(interfaceInfoId, userId);
+//                                    } catch (Exception e) {
+//                                        log.error("invokeCountError",e);
 //                                    }
+//                                    // 怎么知道调用成功？
+//
+////                                    //排除Excel导出，不是application/json不打印。若请求是上传图片则在最上面判断。
+////                                    MediaType contentType = originalResponse.getHeaders().getContentType();
+////                                    if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
+////                                        return bufferFactory.wrap(content);
+////                                    }
+//
+//                                    // 构建返回日志
+//                                    String joinData = new String(content);
+////                            String result = modifyBody(joinData);
+//                                    String result = "zkjtest";
+//                                    List<Object> rspArgs = new ArrayList<>();
+//                                    rspArgs.add(originalResponse.getStatusCode().value());
+//                                    rspArgs.add(exchange.getRequest().getURI());
+//                                    rspArgs.add(result);
+//
+//                                    // 打印日志
+//                                    log.info("响应结果： ", rspArgs.toArray());
+//                                    getDelegate().getHeaders().setContentLength(result.getBytes(StandardCharsets.UTF_8).length);
+////                                    return bufferFactory.wrap(data.getBytes(StandardCharsets.UTF_8));
+//                                    return bufferFactory.wrap(content);
 
-                                    // 构建返回日志
-                                    String joinData = new String(content);
-//                            String result = modifyBody(joinData);
-                                    String result = "zkjtest";
+                                    try {
+                                        innerUserInterfaceInfoService.invokeCount(interfaceInfoId, userId);
+                                    } catch (Exception e) {
+                                        log.error("invokeCount error", e);
+                                    }
+                                    byte[] content = new byte[dataBuffer.readableByteCount()];
+                                    dataBuffer.read(content);
+                                    DataBufferUtils.release(dataBuffer);//释放掉内存
+                                    // 构建日志
+                                    StringBuilder sb2 = new StringBuilder(200);
                                     List<Object> rspArgs = new ArrayList<>();
-                                    rspArgs.add(originalResponse.getStatusCode().value());
-                                    rspArgs.add(exchange.getRequest().getURI());
-                                    rspArgs.add(result);
-
+                                    rspArgs.add(originalResponse.getStatusCode());
+                                    String data = new String(content, StandardCharsets.UTF_8); //data
+                                    sb2.append(data);
                                     // 打印日志
-                                    log.info("响应结果： ", rspArgs.toArray());
-                                    getDelegate().getHeaders().setContentLength(result.getBytes().length);
-//                                    return bufferFactory.wrap(data.getBytes());
+                                    log.info("响应结果：" + data);
                                     return bufferFactory.wrap(content);
                                 })
 
@@ -206,8 +261,10 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
                     return super.writeWith(body);
                 }
             };
+
+            // **一开始先执行这里 转发调用模拟接口**
             // 设置response对象为装饰过的
-            // 转发调用模拟接口
+            // 转发调用模拟接口 调用完以后 执行decoratedResponse的writewith
             return chain.filter(exchange.mutate().response(decoratedResponse).build());
 
         } catch (Exception e) {
